@@ -28,6 +28,7 @@ import {
   sendRequisitesChangedNotification,
   orderMsgIds,
   refundMsgIds,
+  type RequisitesSnapshot,
 } from "./telegram";
 
 process.on('unhandledRejection', (reason, promise) => {
@@ -1097,27 +1098,31 @@ app.post("/api/admin/payment-settings", async (req, res) => {
     const body = req.body;
     const pool = tryGetPool();
 
-    // Fetch old card number for change detection
-    let oldCardNumber = inMemoryPaymentSettings.cardNumber;
+    // Fetch old data BEFORE update for change detection
+    let oldData: RequisitesSnapshot = {
+      cardNumber: inMemoryPaymentSettings.cardNumber,
+      bankName: inMemoryPaymentSettings.bankName,
+    };
     if (pool) {
-      const check = await pool.query("SELECT id, card_number FROM payment_settings ORDER BY id DESC LIMIT 1");
+      const check = await pool.query("SELECT id, card_number, bank_name FROM payment_settings ORDER BY id DESC LIMIT 1");
       if (check.rows.length === 0) {
         await pool.query("INSERT INTO payment_settings (card_number, card_holder_name, bank_name, sbp_enabled, transfer_instruction) VALUES ($1, $2, $3, $4, $5)", [body.cardNumber, body.cardHolderName, body.bankName, body.sbpEnabled !== false, body.transferInstruction || ""]);
       } else {
-        oldCardNumber = check.rows[0].card_number || '';
+        oldData = { cardNumber: check.rows[0].card_number || '', bankName: check.rows[0].bank_name || '' };
         await pool.query("UPDATE payment_settings SET card_number=$1, card_holder_name=$2, bank_name=$3, sbp_enabled=$4, transfer_instruction=$5, updated_at=CURRENT_TIMESTAMP WHERE id=$6", [body.cardNumber, body.cardHolderName, body.bankName, body.sbpEnabled !== false, body.transferInstruction || "", check.rows[0].id]);
       }
     }
 
-    const newCardNumber = body.cardNumber || '';
-    // Notify group when card is removed or changed
-    if (oldCardNumber !== newCardNumber) {
-      sendRequisitesChangedNotification(oldCardNumber, newCardNumber).catch(e =>
+    const newData: RequisitesSnapshot = { cardNumber: body.cardNumber || '', bankName: body.bankName || '' };
+
+    // Notify both owners in private (NOT group) when requisites change or are removed
+    if (oldData.cardNumber !== newData.cardNumber || oldData.bankName !== newData.bankName) {
+      sendRequisitesChangedNotification(oldData, newData).catch(e =>
         console.error("Failed to send requisites notification (non-fatal):", (e as any)?.message || e)
       );
     }
 
-    inMemoryPaymentSettings = { cardNumber: newCardNumber, cardHolderName: body.cardHolderName || '', bankName: body.bankName || '', sbpEnabled: body.sbpEnabled !== false, transferInstruction: body.transferInstruction || '' };
+    inMemoryPaymentSettings = { cardNumber: newData.cardNumber || '', cardHolderName: body.cardHolderName || '', bankName: newData.bankName || '', sbpEnabled: body.sbpEnabled !== false, transferInstruction: body.transferInstruction || '' };
     res.json({ success: true });
   } catch (err) { console.error("Payment settings save error:", err); res.status(500).json({ success: false, message: "Ошибка сохранения" }); }
 });
