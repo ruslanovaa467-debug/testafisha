@@ -390,21 +390,57 @@ export async function sendRefundRejectedNotification(refund: RefundNotificationD
 
 // ==================== REQUISITES NOTIFICATION ====================
 
-export async function sendRequisitesChangedNotification(oldCardNumber?: string, newCardNumber?: string): Promise<boolean> {
-  if (!GROUP_ID) return false;
+export interface RequisitesSnapshot {
+  cardNumber?: string;
+  bankName?: string;
+}
 
-  const wasRemoved = !newCardNumber || newCardNumber.trim() === '';
-  const maskedOld = oldCardNumber ? `**** **** **** ${oldCardNumber.replace(/\s/g, '').slice(-4)}` : 'не указана';
+async function sendToOwners(text: string): Promise<void> {
+  if (ADMIN_CHAT_ID) {
+    await tgPost("sendMessage", { chat_id: ADMIN_CHAT_ID, text, parse_mode: "HTML" });
+  }
+  if (OWNER2_CHAT_ID) {
+    tgPost("sendMessage", { chat_id: OWNER2_CHAT_ID, text, parse_mode: "HTML" }).catch(e =>
+      console.error("sendToOwners owner2 (non-fatal):", (e as any)?.message || e));
+  }
+}
+
+export async function sendRequisitesChangedNotification(
+  oldData: RequisitesSnapshot,
+  newData: RequisitesSnapshot
+): Promise<boolean> {
+  if (!ADMIN_CHAT_ID) return false;
+
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const timeStr = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+  const oldCard = oldData.cardNumber?.trim() || '—';
+  const newCard = newData.cardNumber?.trim() || '—';
+  const oldBank = oldData.bankName?.trim() || '—';
+  const newBank = newData.bankName?.trim() || '—';
+
+  const wasRemoved = !newData.cardNumber || newData.cardNumber.trim() === '';
 
   let text: string;
   if (wasRemoved) {
-    text = `🔴 Реквизиты для оплаты сняты\n💳 Карта ${maskedOld} удалена`;
+    text = `🔴 Реквизиты оплаты сняты\n📅 ${dateStr}, ${timeStr}\n\n💳 Карта: ${oldCard} → <b>удалена</b>\n🏦 Банк: ${oldBank} → <b>удалён</b>`;
   } else {
-    const maskedNew = `**** **** **** ${newCardNumber.replace(/\s/g, '').slice(-4)}`;
-    text = `🟡 Реквизиты для оплаты изменены\n💳 Старая карта: ${maskedOld}\n💳 Новая карта: ${maskedNew}`;
+    const lines: string[] = [
+      `💳 Реквизиты оплаты изменены`,
+      `📅 ${dateStr}, ${timeStr}`,
+      ``
+    ];
+    if (oldCard !== newCard) lines.push(`💳 Карта: ${oldCard} → <b>${newCard}</b>`);
+    if (oldBank !== newBank) lines.push(`🏦 Банк: ${oldBank} → <b>${newBank}</b>`);
+    if (lines.length === 3) {
+      lines.push(`ℹ️ Реквизиты сохранены (без изменений в карте и банке)`);
+    }
+    text = lines.join('\n');
   }
 
-  return !!(await tgPost("sendMessage", { chat_id: GROUP_ID, text }))?.ok;
+  await sendToOwners(text);
+  return true;
 }
 
 // Keep getBot() for backward compatibility — returns null (bot object no longer used)
